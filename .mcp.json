@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "dev-loop": {
+      "type": "stdio",
+      "command": "dev-loop-mcp",
+      "args": [],
+      "env": {
+        "DEV_LOOP_ROOT": "/Users/nicolasgarcia/Projects/dev-loop-mcp"
+      }
+    }
+  }
+}

@@ -10,13 +10,13 @@ Two loop types are available — both share the same TDD pipeline; they differ o
 flowchart LR
     subgraph start_loop["start_loop (feature)"]
         direction LR
-        A("description\nor tasks") --> B["DECOMPOSE\nAI breaks into tasks"]
+        A("description<br/>or tasks") --> B["DECOMPOSE<br/>AI breaks into tasks"]
         B --> C[/"tasks"/]
     end
 
     subgraph start_debug_loop["start_debug_loop (bug)"]
         direction LR
-        D("symptom\n+ context files") --> E["DIAGNOSE\nAI ranks hypotheses"]
+        D("symptom<br/>+ context files") --> E["DIAGNOSE<br/>AI ranks hypotheses"]
         E --> F[/"tasks"/]
     end
 
@@ -25,16 +25,16 @@ flowchart LR
 
     subgraph Pipeline["Shared TDD pipeline"]
         direction LR
-        I[INIT] --> T[TDD_LOOP\nper task]
+        I[INIT] --> T[TDD_LOOP<br/>per task]
         T --> Bu[BUILD]
-        Bu --> De[DEPLOY\noptional]
-        De --> It[INTEG_TEST\noptional]
+        Bu --> De[DEPLOY<br/>optional]
+        De --> It[INTEG_TEST<br/>optional]
         It -->|pass| Qr[QUALITY_REVIEW]
-        It -->|fail| If[INTEG_FIX\nup to 5×]
+        It -->|fail| If[INTEG_FIX<br/>up to 5×]
         If --> Qr
-        Qr --> Ct[CLEAN_TREE\nCHECK]
+        Qr --> Ct[CLEAN_TREE<br/>CHECK]
         Ct --> Pr[PUSH_AND_PR]
-        Pr --> Done(["✓ DONE\nPR opened"])
+        Pr --> Done(["✓ DONE<br/>PR opened"])
     end
 ```
 
@@ -43,7 +43,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     start_loop --> INIT
-    start_debug_loop -->|"DIAGNOSE:\nranked hypotheses → tasks"| INIT
+    start_debug_loop -->|"DIAGNOSE:<br/>ranked hypotheses → tasks"| INIT
 
     INIT -->|"pre-loaded tasks"| TDD_LOOP
     INIT -->|"description only"| DECOMPOSE
@@ -63,7 +63,7 @@ flowchart TD
     INTEG_TEST -->|fail| INTEG_FIX
 
     INTEG_FIX -->|fixed| QUALITY_REVIEW
-    INTEG_FIX -->|"still failing\n(retry, max 5)"| INTEG_FIX
+    INTEG_FIX -->|"still failing<br/>(retry, max 5)"| INTEG_FIX
     INTEG_FIX -->|"5 attempts exhausted"| FAILED
 
     QUALITY_REVIEW --> CLEAN_TREE_CHECK
@@ -85,11 +85,11 @@ Each task in `TDD_LOOP` runs this inner cycle (up to 5 coding iterations):
 
 ```mermaid
 flowchart LR
-    A["Write scenarios\nscenarios/scenarios-*.md"] --> B["Write failing tests\n*.test.ts"]
-    B --> C{"Tests\nfail?"}
+    A["Write scenarios<br/>scenarios/scenarios-*.md"] --> B["Write failing tests<br/>*.test.ts"]
+    B --> C{"Tests<br/>fail?"}
     C -->|"no — tester error"| Z["✗ task failed"]
     C -->|yes| D["Implement"]
-    D --> E{"Tests\npass?"}
+    D --> E{"Tests<br/>pass?"}
     E -->|yes| F["✓ commit & next task"]
     E -->|"no (retry)"| D
 ```
