@@ -215,4 +215,9 @@ export interface RunnerDeps {
   repoRoot: string;
   /** Project configuration loaded from dev-loop.config.json. */
   config: DevLoopConfig;
+  /**
+   * Optional progress logger. Called by the runner at each phase boundary.
+   * If absent, progress is silent.
+   */
+  log?: (message: string) => void;
 }

@@ -36,10 +36,22 @@ export async function runOnce(
   deps: RunnerDeps
 ): Promise<LoopState> {
   const { shell, aiWorker, stateFilePath, repoRoot, config } = deps;
+  const log = deps.log ?? (() => {});
+  const ts = () => new Date().toTimeString().slice(0, 8);
 
   // Terminal states cannot be advanced — throw immediately.
   if (state.phase === "DONE" || state.phase === "FAILED") {
     throw new IllegalTransitionError(state.phase);
+  }
+
+  // Log phase entry with relevant context.
+  if (state.phase === "TDD_LOOP") {
+    const task = state.tasks[state.currentTaskIdx];
+    log(`[${ts()}] TDD_LOOP (${state.currentTaskIdx + 1}/${state.tasks.length}): ${task.title}`);
+  } else if (state.phase === "INTEG_FIX") {
+    log(`[${ts()}] INTEG_FIX (attempt ${state.integFixIteration + 1})`);
+  } else {
+    log(`[${ts()}] ${state.phase}`);
   }
 
   let event: TransitionEvent;
@@ -119,6 +131,19 @@ export async function runOnce(
       const _exhaustive: never = state.phase;
       throw new Error(`runOnce: unhandled phase: ${String(_exhaustive)}`);
     }
+  }
+
+  // Log notable outcomes before transitioning.
+  if (event.type === "TasksDecomposed") {
+    log(`[${ts()}]   decomposed ${event.tasks.length} tasks: ${event.tasks.map((t) => t.title).join(", ")}`);
+  } else if (event.type === "TaskFailed") {
+    log(`[${ts()}]   ✗ ${event.failureReason}`);
+  } else if (event.type === "BuildFailed") {
+    log(`[${ts()}]   ✗ build failed`);
+  } else if (event.type === "DeployFailed") {
+    log(`[${ts()}]   ✗ deploy failed`);
+  } else if (event.type === "PrCreated") {
+    log(`[${ts()}]   PR: ${event.prUrl}`);
   }
 
   const nextState = transition(state, event);

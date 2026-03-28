@@ -92,9 +92,41 @@ function formatStatus(state: LoopState): string {
 }
 
 /**
- * Builds RunnerDeps from environment and config.
+ * Loads KEY=VALUE pairs from a .env file into process.env.
+ * Only sets variables that are not already present in the environment.
+ * Silently skips if the file does not exist or cannot be read.
  */
-async function buildDeps(repoRoot: string): Promise<RunnerDeps> {
+function loadDotEnv(repoRoot: string): void {
+  const envPath = nodePath.join(repoRoot, ".env");
+  let raw: string;
+  try {
+    raw = fs.readFileSync(envPath, "utf-8");
+  } catch {
+    return;
+  }
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
+    if (key && !(key in process.env)) {
+      process.env[key] = val;
+    }
+  }
+}
+
+/**
+ * Builds RunnerDeps from environment and config.
+ * `log` is optional — when provided the runner emits progress lines at each
+ * phase boundary (e.g. piped to server.sendLoggingMessage for MCP clients).
+ */
+async function buildDeps(
+  repoRoot: string,
+  log?: (message: string) => void
+): Promise<RunnerDeps> {
+  loadDotEnv(repoRoot);
   const apiKey = process.env["ANTHROPIC_API_KEY"];
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY environment variable is required");
@@ -112,6 +144,7 @@ async function buildDeps(repoRoot: string): Promise<RunnerDeps> {
     stateFilePath: nodePath.join(repoRoot, ".loop-state.json"),
     repoRoot,
     config,
+    log,
   };
 }
 
@@ -119,9 +152,9 @@ async function buildDeps(repoRoot: string): Promise<RunnerDeps> {
 // Tool handlers
 // ---------------------------------------------------------------------------
 
-async function handleStartLoop(args: Record<string, unknown>): Promise<string> {
+async function handleStartLoop(args: Record<string, unknown>, log: (msg: string) => void): Promise<string> {
   const repoRoot = getRepoRoot();
-  const deps = await buildDeps(repoRoot);
+  const deps = await buildDeps(repoRoot, log);
   const config = await loadConfig(repoRoot);
   const branchPrefix = config.branchPrefix ?? "claude/";
 
@@ -178,9 +211,9 @@ async function handleStartLoop(args: Record<string, unknown>): Promise<string> {
   }
 }
 
-async function handleStartDebugLoop(args: Record<string, unknown>): Promise<string> {
+async function handleStartDebugLoop(args: Record<string, unknown>, log: (msg: string) => void): Promise<string> {
   const repoRoot = getRepoRoot();
-  const deps = await buildDeps(repoRoot);
+  const deps = await buildDeps(repoRoot, log);
   const config = await loadConfig(repoRoot);
   const branchPrefix = config.branchPrefix ?? "claude/";
 
@@ -205,7 +238,10 @@ async function handleStartDebugLoop(args: Record<string, unknown>): Promise<stri
   }
 
   // DIAGNOSE: AI reads symptom + context → ranked hypothesis tasks.
+  const ts = () => new Date().toTimeString().slice(0, 8);
+  log(`[${ts()}] DIAGNOSE: "${symptom}"`);
   const tasks = await deps.aiWorker.diagnose(symptom, contextFiles);
+  log(`[${ts()}]   diagnosed ${tasks.length} hypotheses: ${tasks.map((t) => t.title).join(", ")}`);
 
   // Branch name derived from symptom, under a "debug/" sub-prefix.
   const slug = symptom
@@ -231,9 +267,9 @@ async function handleStartDebugLoop(args: Record<string, unknown>): Promise<stri
   }
 }
 
-async function handleResumeLoop(args: Record<string, unknown>): Promise<string> {
+async function handleResumeLoop(args: Record<string, unknown>, log: (msg: string) => void): Promise<string> {
   const repoRoot = getRepoRoot();
-  const deps = await buildDeps(repoRoot);
+  const deps = await buildDeps(repoRoot, log);
 
   const state = await loadState(deps.stateFilePath);
   if (!state) {
@@ -373,6 +409,7 @@ export async function startMcpServer(): Promise<void> {
     {
       capabilities: {
         tools: {},
+        logging: {},
       },
     }
   );
@@ -387,18 +424,24 @@ export async function startMcpServer(): Promise<void> {
     const { name, arguments: args } = request.params;
     const toolArgs = (args ?? {}) as Record<string, unknown>;
 
+    // Log callback — sends MCP logging notifications to the client so progress
+    // is visible in Claude Code (or any MCP client that displays log messages).
+    const log = (message: string) => {
+      void server.sendLoggingMessage({ level: "info", data: message });
+    };
+
     try {
       let result: string;
 
       switch (name) {
         case "start_loop":
-          result = await handleStartLoop(toolArgs);
+          result = await handleStartLoop(toolArgs, log);
           break;
         case "start_debug_loop":
-          result = await handleStartDebugLoop(toolArgs);
+          result = await handleStartDebugLoop(toolArgs, log);
           break;
         case "resume_loop":
-          result = await handleResumeLoop(toolArgs);
+          result = await handleResumeLoop(toolArgs, log);
           break;
         case "loop_status":
           result = await handleLoopStatus();
