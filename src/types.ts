@@ -74,6 +74,12 @@ export interface LoopState {
   startedAt: string;
   /** ISO 8601 timestamp of the most recent state update. */
   updatedAt: string;
+  /**
+   * Original symptom description passed to start_debug_loop.
+   * Present only when the loop was started via the debug tool.
+   * Included in the PR body as diagnosis context.
+   */
+  diagnosisContext?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,9 +144,19 @@ export interface ShellAdapter {
  * The production implementation uses the Anthropic SDK; tests inject a mock.
  */
 export interface AIWorker {
-  /** Juncture 1: convert raw user input into a structured task list. */
+  /** Juncture 1a: convert raw user input into a structured task list. */
   decompose(
     input: string,
+    contextFiles: Record<string, string>
+  ): Promise<Task[]>;
+
+  /**
+   * Juncture 1b: analyse a symptom + context files and return a ranked list of
+   * root-cause hypotheses as TDD tasks, ordered from most to least likely.
+   * Used by start_debug_loop before handing off to the standard TDD pipeline.
+   */
+  diagnose(
+    symptom: string,
     contextFiles: Record<string, string>
   ): Promise<Task[]>;
 

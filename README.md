@@ -83,6 +83,33 @@ Add to your MCP client configuration (e.g., Claude Desktop `claude_desktop_confi
 
 ## Available tools
 
+### `start_debug_loop`
+
+Start a debug loop from a symptom description. The AI diagnoses root causes as ranked TDD tasks, then runs the standard TDD pipeline per hypothesis, and opens a PR with a full diagnosis writeup.
+
+```json
+{
+  "symptom": "read_website returns failure on most real URLs",
+  "context_files": ["src/tools/read-website.ts", "src/http/client.ts"]
+}
+```
+
+**Parameters:**
+- `symptom` (required) — natural-language description of the observed bug or failure
+- `context_files` (optional) — relative paths to source files the AI should read while diagnosing
+
+**How it works:**
+
+```
+DIAGNOSE (pre-step) → INIT → TDD_LOOP → BUILD → DEPLOY → INTEG_TEST → INTEG_FIX → QUALITY_REVIEW → CLEAN_TREE_CHECK → PUSH_AND_PR
+```
+
+- **DIAGNOSE**: AI reads the symptom and context files, produces a ranked list of root-cause hypotheses as TDD tasks (most likely first)
+- **TDD_LOOP onward**: identical to `start_loop` — one TDD cycle per hypothesis task
+- **PR body**: includes the symptom, root causes identified, and what was fixed
+
+The branch is named `<branchPrefix>debug/<symptom-slug>`.
+
 ### `start_loop`
 
 Start a new development loop.

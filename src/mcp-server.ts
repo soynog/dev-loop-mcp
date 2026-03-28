@@ -15,6 +15,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import Anthropic from "@anthropic-ai/sdk";
+import * as fs from "node:fs";
 import * as nodePath from "node:path";
 import * as crypto from "node:crypto";
 import type { AnthropicClientLike } from "./ai-worker.js";
@@ -177,6 +178,59 @@ async function handleStartLoop(args: Record<string, unknown>): Promise<string> {
   }
 }
 
+async function handleStartDebugLoop(args: Record<string, unknown>): Promise<string> {
+  const repoRoot = getRepoRoot();
+  const deps = await buildDeps(repoRoot);
+  const config = await loadConfig(repoRoot);
+  const branchPrefix = config.branchPrefix ?? "claude/";
+
+  const symptom = args["symptom"] as string | undefined;
+  if (!symptom) {
+    throw new Error("'symptom' is required");
+  }
+
+  const contextFilePaths = (args["context_files"] as string[] | undefined) ?? [];
+
+  // Read any context files the caller specified (best-effort — warn on missing).
+  const contextFiles: Record<string, string> = {};
+  for (const relPath of contextFilePaths) {
+    const absPath = nodePath.join(repoRoot, relPath);
+    try {
+      contextFiles[relPath] = fs.readFileSync(absPath, "utf-8");
+    } catch (err) {
+      console.warn(
+        `start_debug_loop: could not read context file ${relPath}: ${(err as Error).message}`
+      );
+    }
+  }
+
+  // DIAGNOSE: AI reads symptom + context → ranked hypothesis tasks.
+  const tasks = await deps.aiWorker.diagnose(symptom, contextFiles);
+
+  // Branch name derived from symptom, under a "debug/" sub-prefix.
+  const slug = symptom
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  const branch = `${branchPrefix}debug/${slug}`;
+
+  // Preserve the symptom so generatePrBody can write a diagnosis-aware PR body.
+  const initialState: LoopState = {
+    ...createInitialState(branch, tasks, "INIT"),
+    diagnosisContext: symptom,
+  };
+
+  await saveState(deps.stateFilePath, initialState);
+  const finalState = await runLoop(initialState, deps);
+
+  if (finalState.phase === "DONE") {
+    return `Debug loop completed successfully.\nPR: ${finalState.prUrl ?? "unknown"}`;
+  } else {
+    return `Debug loop failed.\nReason: ${finalState.failureReason ?? "unknown"}`;
+  }
+}
+
 async function handleResumeLoop(args: Record<string, unknown>): Promise<string> {
   const repoRoot = getRepoRoot();
   const deps = await buildDeps(repoRoot);
@@ -257,6 +311,35 @@ const TOOLS = [
     },
   },
   {
+    name: "start_debug_loop",
+    description:
+      "Start an AI-driven debug loop from a symptom description. " +
+      "Phase 1 — DIAGNOSE: the AI reads the specified context files and generates a " +
+      "ranked list of root-cause hypotheses as TDD tasks (most likely first). " +
+      "Phase 2 onwards: the standard TDD pipeline runs per hypothesis task — " +
+      "failing tests encode each hypothesis, then implementation fixes it. " +
+      "Ends with a PR whose body contains a full diagnosis writeup.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        symptom: {
+          type: "string",
+          description:
+            "Natural-language description of the observed bug or failure " +
+            "(e.g. 'read_website returns failure on most real URLs').",
+        },
+        context_files: {
+          type: "array",
+          description:
+            "Optional list of relative file paths to read and include as context " +
+            "for the diagnosis step.",
+          items: { type: "string" },
+        },
+      },
+      required: ["symptom"],
+    },
+  },
+  {
     name: "resume_loop",
     description:
       "Resume an interrupted development loop from the last saved state. " +
@@ -310,6 +393,9 @@ export async function startMcpServer(): Promise<void> {
       switch (name) {
         case "start_loop":
           result = await handleStartLoop(toolArgs);
+          break;
+        case "start_debug_loop":
+          result = await handleStartDebugLoop(toolArgs);
           break;
         case "resume_loop":
           result = await handleResumeLoop(toolArgs);

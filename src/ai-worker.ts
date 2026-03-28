@@ -70,6 +70,7 @@ export class DecomposeError extends Error {
 
 const DEFAULT_MODEL_ID = "claude-sonnet-4-6";
 const DECOMPOSE_MAX_TOKENS = 4096;
+const DIAGNOSE_MAX_TOKENS = 4096;
 const PR_BODY_MAX_TOKENS = 1024;
 const TDD_LOOP_MAX_TOKENS = 8192;
 const TDD_MAX_ITERATIONS = 5;
@@ -80,6 +81,16 @@ const DECOMPOSE_SYSTEM_PROMPT =
   "enough to implement in a single TDD cycle (scenarios → failing tests → implementation). " +
   "Each task must have: id (number), title (short string), " +
   "scope (affected files or modules), acceptance (plain-English success definition). " +
+  "Reply with ONLY a JSON code block containing a Task[] array.";
+
+const DIAGNOSE_SYSTEM_PROMPT =
+  "You are a debugging engineer. Given a symptom and relevant source files, identify the " +
+  "most likely root causes ordered from most to least likely. " +
+  "For each root cause produce one TDD task: a small, independently testable hypothesis " +
+  "that will be verified by writing a failing test then implementing the fix. " +
+  "Each task must have: id (number), title (short string naming the root-cause hypothesis), " +
+  "scope (affected files or modules), acceptance (plain-English description of correct " +
+  "behaviour after the fix). " +
   "Reply with ONLY a JSON code block containing a Task[] array.";
 
 const PR_BODY_SYSTEM_PROMPT =
@@ -299,6 +310,8 @@ function extractTddFailures(parsed: VitestJsonOutput): FailureInfo[] {
 /**
  * Builds the user message content for `generatePrBody`.
  * Summarises the loop state: branch name, tasks with status and iterations.
+ * When a diagnosisContext is present (debug loop), the PR instructions ask for
+ * a writeup that covers the symptom, root causes found, and what was fixed.
  */
 function buildPrBodyUserMessage(state: LoopState): string {
   const taskLines = state.tasks
@@ -307,11 +320,23 @@ function buildPrBodyUserMessage(state: LoopState): string {
         `- [${t.status}] ${t.title} (iterations: ${t.iterations})`
     )
     .join("\n");
-  return (
-    `Branch: ${state.branch}\n\nTasks:\n${taskLines}\n\n` +
-    "Write a GitHub PR title and body for these changes. " +
-    "Format your response as:\ntitle: <short title>\nbody: <description>"
-  );
+
+  let message = `Branch: ${state.branch}\n\nTasks:\n${taskLines}\n\n`;
+
+  if (state.diagnosisContext) {
+    message +=
+      `Symptom investigated: ${state.diagnosisContext}\n\n` +
+      "Write a GitHub PR title and body for this debug fix. " +
+      "The body must include: the symptom, the root causes identified (one per task above), " +
+      "and a brief description of the fix applied. " +
+      "Format your response as:\ntitle: <short title>\nbody: <description>";
+  } else {
+    message +=
+      "Write a GitHub PR title and body for these changes. " +
+      "Format your response as:\ntitle: <short title>\nbody: <description>";
+  }
+
+  return message;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +414,64 @@ export class AnthropicDevWorker implements AIWorker {
 
     throw new DecomposeError(
       "decompose: could not parse a valid Task[] from two AI attempts"
+    );
+  }
+
+  /**
+   * Analyses a symptom description and optional context files to produce a ranked
+   * list of root-cause hypotheses as TDD tasks (most likely first).
+   *
+   * Structurally mirrors `decompose`: one AI call with a parse-and-retry fallback.
+   * Throws DecomposeError if both attempts produce unparseable output.
+   */
+  async diagnose(
+    symptom: string,
+    contextFiles: Record<string, string>
+  ): Promise<Task[]> {
+    // Build user message: symptom first, then any provided source files.
+    let userMessage = `Symptom: ${symptom}`;
+    for (const [filename, content] of Object.entries(contextFiles)) {
+      userMessage += `\n\n--- ${filename} ---\n${content}`;
+    }
+
+    // First attempt
+    const firstResponse = await this.client.messages.create({
+      model: this.modelId,
+      max_tokens: DIAGNOSE_MAX_TOKENS,
+      system: DIAGNOSE_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userMessage }],
+    });
+
+    const firstText = extractText(firstResponse.content);
+    const firstTasks = parseTasksFromText(firstText);
+    if (firstTasks !== null) {
+      return firstTasks;
+    }
+
+    console.warn("diagnose: first response was not valid JSON, retrying with correction prompt");
+
+    // Second attempt — correction prompt
+    const secondResponse = await this.client.messages.create({
+      model: this.modelId,
+      max_tokens: DIAGNOSE_MAX_TOKENS,
+      system: DIAGNOSE_SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content:
+            "Your previous response was not valid JSON. Reply with ONLY a JSON array.",
+        },
+      ],
+    });
+
+    const secondText = extractText(secondResponse.content);
+    const secondTasks = parseTasksFromText(secondText);
+    if (secondTasks !== null) {
+      return secondTasks;
+    }
+
+    throw new DecomposeError(
+      "diagnose: could not parse a valid Task[] from two AI attempts"
     );
   }
 
