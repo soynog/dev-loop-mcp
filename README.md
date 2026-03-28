@@ -4,22 +4,108 @@ An MCP (Model Context Protocol) server that runs an AI-driven TDD development lo
 
 ## What it does
 
-The dev-loop drives your project through these phases automatically:
+Two loop types are available — both share the same TDD pipeline; they differ only in how tasks are produced:
 
-```
-INIT → DECOMPOSE → TDD_LOOP → BUILD → DEPLOY → INTEG_TEST → INTEG_FIX → QUALITY_REVIEW → CLEAN_TREE_CHECK → PUSH_AND_PR → DONE
+```mermaid
+flowchart LR
+    subgraph start_loop["start_loop (feature)"]
+        direction LR
+        A("description\nor tasks") --> B["DECOMPOSE\nAI breaks into tasks"]
+        B --> C[/"tasks"/]
+    end
+
+    subgraph start_debug_loop["start_debug_loop (bug)"]
+        direction LR
+        D("symptom\n+ context files") --> E["DIAGNOSE\nAI ranks hypotheses"]
+        E --> F[/"tasks"/]
+    end
+
+    C --> Pipeline["TDD pipeline"]
+    F --> Pipeline
+
+    subgraph Pipeline["Shared TDD pipeline"]
+        direction LR
+        I[INIT] --> T[TDD_LOOP\nper task]
+        T --> Bu[BUILD]
+        Bu --> De[DEPLOY\noptional]
+        De --> It[INTEG_TEST\noptional]
+        It -->|pass| Qr[QUALITY_REVIEW]
+        It -->|fail| If[INTEG_FIX\nup to 5×]
+        If --> Qr
+        Qr --> Ct[CLEAN_TREE\nCHECK]
+        Ct --> Pr[PUSH_AND_PR]
+        Pr --> Done(["✓ DONE\nPR opened"])
+    end
 ```
 
-- **INIT**: Creates a git branch
-- **DECOMPOSE**: AI breaks your description into testable tasks
-- **TDD_LOOP**: AI writes scenarios, failing tests, then implementation (per task)
-- **BUILD**: Runs your build command
-- **DEPLOY**: Runs your deploy command (skipped if not configured)
-- **INTEG_TEST**: Runs your integration tests (skipped if not configured)
-- **INTEG_FIX**: AI fixes integration test failures (up to 5 attempts)
-- **QUALITY_REVIEW**: AI reviews and cleans up the diff
-- **CLEAN_TREE_CHECK**: Commits any stray files
-- **PUSH_AND_PR**: Pushes branch and opens a GitHub PR
+### Full state machine
+
+```mermaid
+flowchart TD
+    start_loop --> INIT
+    start_debug_loop -->|"DIAGNOSE:\nranked hypotheses → tasks"| INIT
+
+    INIT -->|"pre-loaded tasks"| TDD_LOOP
+    INIT -->|"description only"| DECOMPOSE
+    DECOMPOSE -->|"AI → Task[]"| TDD_LOOP
+
+    TDD_LOOP -->|"task done, more remain"| TDD_LOOP
+    TDD_LOOP -->|"all tasks done"| BUILD
+    TDD_LOOP -->|"task failed"| FAILED
+
+    BUILD -->|pass| DEPLOY
+    BUILD -->|fail| FAILED
+
+    DEPLOY -->|"pass / skipped"| INTEG_TEST
+    DEPLOY -->|fail| FAILED
+
+    INTEG_TEST -->|"pass / skipped"| QUALITY_REVIEW
+    INTEG_TEST -->|fail| INTEG_FIX
+
+    INTEG_FIX -->|fixed| QUALITY_REVIEW
+    INTEG_FIX -->|"still failing\n(retry, max 5)"| INTEG_FIX
+    INTEG_FIX -->|"5 attempts exhausted"| FAILED
+
+    QUALITY_REVIEW --> CLEAN_TREE_CHECK
+    CLEAN_TREE_CHECK --> PUSH_AND_PR
+    PUSH_AND_PR --> DONE
+
+    DONE(["✓ DONE"])
+    FAILED(["✗ FAILED"])
+
+    style DONE fill:#22c55e,color:#fff
+    style FAILED fill:#ef4444,color:#fff
+    style start_loop fill:#6366f1,color:#fff
+    style start_debug_loop fill:#f59e0b,color:#fff
+```
+
+### Per-task TDD cycle
+
+Each task in `TDD_LOOP` runs this inner cycle (up to 5 coding iterations):
+
+```mermaid
+flowchart LR
+    A["Write scenarios\nscenarios/scenarios-*.md"] --> B["Write failing tests\n*.test.ts"]
+    B --> C{"Tests\nfail?"}
+    C -->|"no — tester error"| Z["✗ task failed"]
+    C -->|yes| D["Implement"]
+    D --> E{"Tests\npass?"}
+    E -->|yes| F["✓ commit & next task"]
+    E -->|"no (retry)"| D
+```
+
+**Phase reference:**
+- **INIT**: Creates the git branch
+- **DECOMPOSE**: AI converts a description into a `Task[]`
+- **DIAGNOSE**: *(debug loop only)* AI reads symptom + context files and produces ranked root-cause hypotheses as a `Task[]`
+- **TDD_LOOP**: Per-task: scenarios → failing tests → implementation (up to 5 coding iterations per task)
+- **BUILD**: Runs `buildCommand`
+- **DEPLOY**: Runs `deployCommand` — skipped if not configured
+- **INTEG_TEST**: Runs `integTestCommand` — skipped if not configured
+- **INTEG_FIX**: AI diagnoses and fixes integration test failures (up to 5 attempts)
+- **QUALITY_REVIEW**: AI reviews the full branch diff and applies quality fixes
+- **CLEAN_TREE_CHECK**: Auto-commits any uncommitted files
+- **PUSH_AND_PR**: Pushes the branch and opens a GitHub PR
 
 ## Installation
 
@@ -98,15 +184,7 @@ Start a debug loop from a symptom description. The AI diagnoses root causes as r
 - `symptom` (required) — natural-language description of the observed bug or failure
 - `context_files` (optional) — relative paths to source files the AI should read while diagnosing
 
-**How it works:**
-
-```
-DIAGNOSE (pre-step) → INIT → TDD_LOOP → BUILD → DEPLOY → INTEG_TEST → INTEG_FIX → QUALITY_REVIEW → CLEAN_TREE_CHECK → PUSH_AND_PR
-```
-
-- **DIAGNOSE**: AI reads the symptom and context files, produces a ranked list of root-cause hypotheses as TDD tasks (most likely first)
-- **TDD_LOOP onward**: identical to `start_loop` — one TDD cycle per hypothesis task
-- **PR body**: includes the symptom, root causes identified, and what was fixed
+The DIAGNOSE step runs before the standard TDD pipeline (see state machine above). The PR body includes the symptom, root causes identified, and what was fixed.
 
 The branch is named `<branchPrefix>debug/<symptom-slug>`.
 
