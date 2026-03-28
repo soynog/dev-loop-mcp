@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.loop-state.json
+.loop-state.json.tmp
+*.log
+.DS_Store
+.env
